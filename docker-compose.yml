@@ -1,0 +1,57 @@
+version: '3.8'
+
+services:
+  # xDS Server
+  xds-server:
+    build:
+      context: ./xds-server
+      dockerfile: Dockerfile
+    ports:
+      - "18000:18000"  # xDS gRPC port
+    networks:
+      default:
+        aliases:
+          - xds-server
+
+  # Spring Boot Application
+  spring_app:
+    build:
+      context: ./demo
+      dockerfile: Dockerfile
+    environment:
+      - SPRING_PROFILES_ACTIVE=docker
+    networks:
+      default:
+        aliases:
+          - spring_app
+
+  # Envoy Proxy
+  envoy:
+    image: envoyproxy/envoy:v1.29-latest
+    ports:
+      - "8080:8080"  # Ingress traffic
+      - "8081:8081" # Egress traffic
+      - "9901:9901"  # Admin interface
+    volumes:
+      - ./envoy/envoy-dynamic.yaml:/etc/envoy/envoy.yaml
+    command: /usr/local/bin/envoy -c /etc/envoy/envoy.yaml --service-cluster test-cluster --service-node test-node
+    depends_on:
+      - xds-server
+      - spring_app
+      - nginx_external_api
+
+  # Nginx External API
+  nginx_external_api:
+    image: nginx:alpine
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf
+    expose:
+      - "80"
+    networks:
+      default:
+        aliases:
+          - nginx_external_api
+
+networks:
+  default:
+    driver: bridge
