@@ -222,11 +222,15 @@ func makeHTTPListener(listenerName string, routeName string, port uint32) *liste
 }
 
 func setSnapshot(snapshotCache cache.SnapshotCache) error {
-	snap, _ := cache.NewSnapshot("1",
+	return setSnapshotWithParams(snapshotCache, "1", "spring_app", 8080, "nginx_external_api", 80)
+}
+
+func setSnapshotWithParams(snapshotCache cache.SnapshotCache, version string, springHost string, springPort uint32, nginxHost string, nginxPort uint32) error {
+	snap, _ := cache.NewSnapshot(version,
 		map[resource.Type][]types.Resource{
 			resource.ClusterType: {
-				makeCluster(ClusterName, "spring_app", 8080),
-				makeCluster(ExternalClusterName, "nginx_external_api", 80),
+				makeCluster(ClusterName, springHost, springPort),
+				makeCluster(ExternalClusterName, nginxHost, nginxPort),
 			},
 			resource.RouteType: {
 				makeRoute(RouteName, ClusterName, false),

@@ -4,6 +4,8 @@ import (
 	"context"
 	"log"
 	"net"
+	"net/http"
+	"strconv"
 	"time"
 
 	"google.golang.org/grpc"
@@ -25,12 +27,72 @@ const (
 	grpcMaxConcurrentStreams = 1000000
 )
 
+var (
+	snapshotCache cache.SnapshotCache
+	versionCounter int64 = 1
+)
+
+func updateConfig(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	// Parse query parameters for dynamic configuration
+	springPort := r.URL.Query().Get("spring_port")
+	nginxPort := r.URL.Query().Get("nginx_port")
+	springHost := r.URL.Query().Get("spring_host")
+	nginxHost := r.URL.Query().Get("nginx_host")
+
+	// Set defaults if not provided
+	if springPort == "" {
+		springPort = "8080"
+	}
+	if nginxPort == "" {
+		nginxPort = "80"
+	}
+	if springHost == "" {
+		springHost = "spring_app"
+	}
+	if nginxHost == "" {
+		nginxHost = "nginx_external_api"
+	}
+
+	// Convert ports to uint32
+	springPortUint, err := strconv.ParseUint(springPort, 10, 32)
+	if err != nil {
+		http.Error(w, "Invalid spring_port", http.StatusBadRequest)
+		return
+	}
+	nginxPortUint, err := strconv.ParseUint(nginxPort, 10, 32)
+	if err != nil {
+		http.Error(w, "Invalid nginx_port", http.StatusBadRequest)
+		return
+	}
+
+	// Increment version for cache consistency
+	versionCounter++
+	version := strconv.FormatInt(versionCounter, 10)
+
+	// Update snapshot with new configuration
+	if err := setSnapshotWithParams(snapshotCache, version, springHost, uint32(springPortUint), nginxHost, uint32(nginxPortUint)); err != nil {
+		log.Printf("Failed to update snapshot: %v", err)
+		http.Error(w, "Failed to update configuration", http.StatusInternalServerError)
+		return
+	}
+
+	log.Printf("Configuration updated: Spring=%s:%s, Nginx=%s:%s, Version=%s", 
+		springHost, springPort, nginxHost, nginxPort, version)
+	w.WriteHeader(http.StatusOK)
+	w.Write([]byte("Configuration updated successfully"))
+}
+
 func main() {
 	// Create a cache
-	cache := cache.NewSnapshotCache(false, cache.IDHash{}, nil)
+	snapshotCache = cache.NewSnapshotCache(false, cache.IDHash{}, nil)
 
 	// Create server
-	srv := server.NewServer(context.Background(), cache, nil)
+	srv := server.NewServer(context.Background(), snapshotCache, nil)
 
 	// gRPC server
 	var grpcOptions []grpc.ServerOption
@@ -55,11 +117,20 @@ func main() {
 	listenerservice.RegisterListenerDiscoveryServiceServer(grpcServer, srv)
 
 	// Set initial configuration
-	if err := setSnapshot(cache); err != nil {
+	if err := setSnapshot(snapshotCache); err != nil {
 		log.Fatalf("Failed to set snapshot: %v", err)
 	}
 
-	// Start server
+	// Start HTTP server for configuration updates
+	http.HandleFunc("/update-config", updateConfig)
+	go func() {
+		log.Printf("HTTP API server listening on :8090")
+		if err := http.ListenAndServe(":8090", nil); err != nil {
+			log.Fatalf("Failed to start HTTP server: %v", err)
+		}
+	}()
+
+	// Start gRPC server
 	lis, err := net.Listen("tcp", ":18000")
 	if err != nil {
 		log.Fatalf("Failed to listen: %v", err)

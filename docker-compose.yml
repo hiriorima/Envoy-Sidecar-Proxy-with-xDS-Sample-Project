@@ -8,6 +8,7 @@ services:
       dockerfile: Dockerfile
     ports:
       - "18000:18000"  # xDS gRPC port
+      - "8090:8090"    # HTTP API port for config updates
     networks:
       default:
         aliases:
